@@ -12,6 +12,7 @@ ds = read_data(os.path.join(PATH, 'chirps-v2.0.monthly.nc'))
 
 time_var = ds.variables["time"][:]
 october_indices = [i for i, t in enumerate(time_var) if (i + 1) % 10 == 0 ]
+october_indices = october_indices[0:30]
 
 lat_var = ds.variables["latitude"][:]
 lon_var = ds.variables["longitude"][:]
