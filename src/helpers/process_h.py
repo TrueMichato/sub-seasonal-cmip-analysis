@@ -77,31 +77,6 @@ def collect_all_datasets(precipitation_dir: str, target_dim: tuple, unit_convers
     return interpolated_matrices
 
 
-
-def plot_precp_heatmap(ax, mat: np.ndarray, boundaries: list, label: str, title: str, treshold: float = 0.05) -> None:
-    cmap = plt.get_cmap('jet')
-    cmap_with_transparency = cmap(np.linspace(0, 1, cmap.N))
-    
-    #A treshold of 0.01 is the same as 1 mm
-    cmap_with_transparency[:, -1] = np.where(np.linspace(0, 1, cmap.N) <= treshold, 0, 1)  # Last column is the alpha channel
-    transparent_cmap = mcolors.ListedColormap(cmap_with_transparency)
-       
-    ax.set_extent(boundaries, crs=ccrs.PlateCarree())
-    ax.add_feature(cfeature.COASTLINE)
-    ax.add_feature(cfeature.BORDERS, linestyle=':')
-    ax.add_feature(cfeature.LAND, color='whitesmoke')
-    
-    norm = mcolors.Normalize(vmin=np.min(mat), vmax=np.max(mat))
-    im = ax.imshow(mat, origin='lower', cmap=transparent_cmap, extent=boundaries,
-                    transform=ccrs.PlateCarree(), interpolation='none', norm=norm)
-
-    cbar = plt.colorbar(im, ax=ax, label=label, orientation='horizontal', pad=0.05, fraction=0.046)
-    cbar.set_label(label)
-    ax.set_title(f"{title}")
-#     plt.show()
-
-
-
 ##############################################################################################################################
     ##################################### for paper reproduction part ##########################################
 ##############################################################################################################################
@@ -116,7 +91,13 @@ def calc_dmi_precp_corr_loop(dmi: np.ndarray, precip: np.ndarray) -> np.ndarray:
             precip_series = precip[:, i, j]
 
             # Compute the correlation coefficient between DMI and the current grid point's time series
-            correlation_map[i, j] = np.corrcoef(dmi, precip_series)[0, 1]
+            if any(item == np.nan for item in precip_series):
+                correlation_map[i, j] = np.nan
+            elif np.std(precip_series) == 0:
+            # Set the correlation to NaN for constant series
+                correlation_map[i, j] = np.nan
+            else:
+                correlation_map[i, j] = scipy.stats.pearsonr(dmi, precip_series)[0]
 
     return correlation_map
 
@@ -126,48 +107,62 @@ def calc_dmi_precp_corr_vec(dmi: np.ndarray, precip: np.ndarray) -> np.ndarray:
     # Reshape precipitation data from (30, 600, 600) to (30, 360000)
     # Each column represents a grid point's time series
 
-    # Step 1: Detrend the DMI to ensure no linear trend affects correlation
-    dmi_detrended = dmi - np.mean(dmi)
+#     # Step 1: Detrend the DMI to ensure no linear trend affects correlation
+#     dmi_detrended = dmi - np.mean(dmi)
 
-    # Step 2: Detrend the precipitation data for each grid point
-    precip_detrended = precip - np.mean(precip, axis=0)
+#     # Step 2: Detrend the precipitation data for each grid point
+#     precip_detrended = precip - np.mean(precip, axis=0)
 
-    # Step 3: Normalize the detrended data
-    dmi_normalized = dmi_detrended / np.std(dmi_detrended)
+#     # Step 3: Normalize the detrended data
+#     dmi_normalized = dmi_detrended / np.std(dmi_detrended)
 
-    # Step 4: Normalize the precipitation data along the time axis
-    precip_normalized = precip_detrended / np.std(precip_detrended, axis=0)
+#     # Step 4: Normalize the precipitation data along the time axis
+#     precip_normalized = precip_detrended / np.std(precip_detrended, axis=0)
 
-    # Step 5: Compute the correlation coefficient across all grid points in one operation
-    # Dot product between normalized DMI and normalized precipitation for each grid point
-    correlation_map = np.tensordot(dmi_normalized, precip_normalized, axes=1) / (len(dmi) - 1)
+#     # Step 5: Compute the correlation coefficient across all grid points in one operation
+#     # Dot product between normalized DMI and normalized precipitation for each grid point
+#     correlation_map = np.tensordot(dmi_normalized, precip_normalized, axes=1) / (len(dmi) - 1)
+    reshaped_precip = precip.reshape(dmi.shape[0], -1)
 
-#     precipitation_flat = precip.reshape(precip.shape[0], -1)
+    # Calculate the mean and standard deviation of the reshaped chirps
+    mean_precip = np.mean(reshaped_precip, axis=0)
+    # Check for constant time series
+    nan_mask = np.any(np.isnan(reshaped_precip), axis=0)
+    std_precip = np.nanstd(reshaped_precip, axis=0)
+    constant_series_mask = (std_precip == 0)
 
-#     # Mean-center the DMI and precipitation data
-#     dmi_centered = dmi - np.mean(dmi)
-#     precipitation_centered = precipitation_flat - np.mean(precipitation_flat, axis=0)
+    # Combine masks to get final invalid mask
+    invalid_mask = nan_mask | constant_series_mask
 
-#     # Calculate the standard deviation of DMI and precipitation data
-#     dmi_std = np.std(dmi)
-#     precipitation_std = np.std(precipitation_flat, axis=0)
+    # Compute the normalized (zero mean, unit variance) time series
+    normalized_precip = (reshaped_precip - mean_precip) / std_precip
 
-#     # Compute the normalized (z-score) DMI and precipitation data
-#     dmi_normalized = dmi_centered / dmi_std
-#     precipitation_normalized = precipitation_centered / precipitation_std
+    # Calculate the mean and standard deviation of `dmi`
+    mean_dmi = np.mean(dmi)
+    std_dmi = np.std(dmi)
 
-#     # Compute the correlation coefficients using matrix multiplication
-#     correlation_flat = np.dot(dmi_normalized, precipitation_normalized) / (len(dmi) - 1)
+    # Normalize `dmi`
+    normalized_dmi = (dmi - mean_dmi) / std_dmi
 
-#     # Reshape the correlation coefficients back 
-#     correlation_map = correlation_flat.reshape(precip.shape[1], precip.shape[2])
+    # Compute the correlation for non-constant time series
+    correlation_flat = np.dot(normalized_precip.T, normalized_dmi) / (dmi.shape[0] - 1)
 
-    return correlation_map
+    # Replace correlations for constant series with NaN
+    correlation_flat[invalid_mask] = np.nan
+
+    # Reshape back to (400, 600)
+    correlations = correlation_flat.reshape(precip.shape[1], precip.shape[2])
+    return correlations
 
 
 
 def calc_corr_t_test(r: float, n: int = 30):
-    return r * np.sqrt((n-2) / (1-r**2))
+    t_stat = r * np.sqrt((n - 2) / (1 - r**2))
+    df = n - 2 # Degrees of freedom
+
+    # Calculate p-values from the t-statistics
+    p_values = 2 * (1 - scipy.stats.t.cdf(np.abs(t_stat), df))
+    return p_values
     
 
 

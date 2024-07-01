@@ -8,7 +8,6 @@ from scipy import interpolate
 import scipy
 import tqdm
 import matplotlib.colors as mcolors
-# import pandas as pd
 
 
 def plot_precp_heatmap(ax, mat: np.ndarray, boundaries: list, label: str, title: str, treshold: float = 0.05) -> None:
@@ -30,5 +29,55 @@ def plot_precp_heatmap(ax, mat: np.ndarray, boundaries: list, label: str, title:
 
     cbar = plt.colorbar(im, ax=ax, label=label, orientation='horizontal', pad=0.05, fraction=0.046)
     cbar.set_label(label)
+    ax.set_title(f"{title}")
+#     plt.show()
+
+
+def create_transparent_cmap():
+    # Define a colormap (blue to red) with transparency in the middle
+    cmap = plt.cm.RdBu_r
+    transparent_cmap = cmap(np.linspace(0, 1, 256))
+    
+    # Set alpha (transparency) values near the middle (around zero correlation) to be transparent
+    middle = int(256 / 2)
+    transparent_cmap[middle - 10: middle + 10, -1] = np.linspace(0, 1, 20)
+
+    # Create a colormap object
+    return mcolors.ListedColormap(transparent_cmap)
+
+def plot_corr_heatmap(ax, mat: np.ndarray, boundaries: list, label: str, title: str, treshold: float = 0) -> None:
+    transparent_cmap = create_transparent_cmap()
+
+    # Set normalization to center around zero
+    norm = mcolors.TwoSlopeNorm(vmin=np.min(mat), vcenter=0, vmax=np.max(mat))
+
+    # Plot using Cartopy
+    ax.set_extent(boundaries, crs=ccrs.PlateCarree())
+
+    # Add features like coastlines, borders, and land
+    ax.add_feature(cfeature.COASTLINE)
+    ax.add_feature(cfeature.BORDERS, linestyle=':')
+    ax.add_feature(cfeature.LAND, color='whitesmoke')
+
+    # Display the correlation data with the custom colormap
+    im = ax.imshow(mat, origin='lower', cmap=transparent_cmap, extent=boundaries,
+                   transform=ccrs.PlateCarree(), interpolation='none', norm=norm)
+
+    # Add a colorbar with a label
+    cbar = plt.colorbar(im, ax=ax, label='Correlation', orientation='horizontal', pad=0.05, fraction=0.046)
+    cbar.set_label('Correlation')
+
+#     # Set the title of the plot
+#     ax.set_extent(boundaries, crs=ccrs.PlateCarree())
+#     ax.add_feature(cfeature.COASTLINE)
+#     ax.add_feature(cfeature.BORDERS, linestyle=':')
+#     ax.add_feature(cfeature.LAND, color='whitesmoke')
+    
+#     norm = mcolors.Normalize(vmin=np.min(mat), vmax=np.max(mat))
+#     im = ax.imshow(mat, origin='lower', cmap=transparent_cmap, extent=boundaries,
+#                     transform=ccrs.PlateCarree(), interpolation='none', norm=norm)
+
+#     cbar = plt.colorbar(im, ax=ax, label=label, orientation='horizontal', pad=0.05, fraction=0.046)
+#     cbar.set_label(label)
     ax.set_title(f"{title}")
 #     plt.show()
