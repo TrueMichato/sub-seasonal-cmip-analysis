@@ -45,11 +45,22 @@ def create_transparent_cmap():
     # Create a colormap object
     return mcolors.ListedColormap(transparent_cmap)
 
-def plot_corr_heatmap(ax, mat: np.ndarray, boundaries: list, label: str, title: str, treshold: float = 0) -> None:
-    transparent_cmap = create_transparent_cmap()
 
-    # Set normalization to center around zero
-    norm = mcolors.TwoSlopeNorm(vmin=np.min(mat), vcenter=0, vmax=np.max(mat))
+def plot_corr_heatmap(ax, mat: np.ndarray, boundaries: list, label: str, title: str, threshold: float = 0) -> None:
+    # Normalize always between -1 and 1
+    norm = mcolors.TwoSlopeNorm(vmin=-1, vcenter=0, vmax=1)
+    
+    # Create a colormap with transparency between -0.1 and 0.1
+    # Define a colormap with transparency in the middle
+    cmap = plt.get_cmap('coolwarm').copy()  # Use a diverging colormap
+    transparent_cmap = cmap(np.linspace(0, 1, 256))  # Get colormap colors
+
+    # Set alpha (transparency) between -0.1 and 0.1
+    midpoint = np.linspace(0, 1, 256)
+    transparent_cmap[(midpoint > 0.45) & (midpoint < 0.55), -1] = 0  # Make the middle range transparent
+
+    # Create the custom colormap
+    transparent_cmap = mcolors.ListedColormap(transparent_cmap)
 
     # Plot using Cartopy
     ax.set_extent(boundaries, crs=ccrs.PlateCarree())
@@ -63,9 +74,33 @@ def plot_corr_heatmap(ax, mat: np.ndarray, boundaries: list, label: str, title: 
     im = ax.imshow(mat, origin='lower', cmap=transparent_cmap, extent=boundaries,
                    transform=ccrs.PlateCarree(), interpolation='none', norm=norm)
 
-    # Add a colorbar with a label
+    # Add a colorbar with a label, always between -1 and 1
     cbar = plt.colorbar(im, ax=ax, label='Correlation', orientation='horizontal', pad=0.05, fraction=0.046)
     cbar.set_label('Correlation')
+
+    ax.set_title(title)
+    ax.set_xlabel(label)
+# def plot_corr_heatmap(ax, mat: np.ndarray, boundaries: list, label: str, title: str, treshold: float = 0) -> None:
+#     # Set normalization to center around zero
+#     norm = mcolors.TwoSlopeNorm(vmin=np.min(mat), vcenter=0, vmax=np.max(mat))
+
+#     # Plot using Cartopy
+#     ax.set_extent(boundaries, crs=ccrs.PlateCarree())
+
+#     # Add features like coastlines, borders, and land
+#     ax.add_feature(cfeature.COASTLINE)
+#     ax.add_feature(cfeature.BORDERS, linestyle=':')
+#     ax.add_feature(cfeature.LAND, color='whitesmoke')
+
+#     # Display the correlation data with the custom colormap
+#     im = ax.imshow(mat, origin='lower', cmap=transparent_cmap, extent=boundaries,
+#                    transform=ccrs.PlateCarree(), interpolation='none', norm=norm)
+
+#     # Add a colorbar with a label
+#     cbar = plt.colorbar(im, ax=ax, label='Correlation', orientation='horizontal', pad=0.05, fraction=0.046)
+#     cbar.set_label('Correlation')
+#     ax.set_title(f"{title}")
+
 
 #     # Set the title of the plot
 #     ax.set_extent(boundaries, crs=ccrs.PlateCarree())
@@ -79,5 +114,4 @@ def plot_corr_heatmap(ax, mat: np.ndarray, boundaries: list, label: str, title: 
 
 #     cbar = plt.colorbar(im, ax=ax, label=label, orientation='horizontal', pad=0.05, fraction=0.046)
 #     cbar.set_label(label)
-    ax.set_title(f"{title}")
-#     plt.show()
+# #     plt.show()

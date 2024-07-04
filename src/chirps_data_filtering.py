@@ -11,7 +11,7 @@ def read_data(file_path):
 ds = read_data(os.path.join(PATH, 'chirps-v2.0.monthly.nc'))
 
 time_var = ds.variables["time"][:]
-october_indices = [i for i, t in enumerate(time_var) if (i + 1) % 10 == 0 ]
+october_indices = [i for i, t in enumerate(time_var) if (i + 1) % 11 == 0 ]
 october_indices = october_indices[0:30]
 
 lat_var = ds.variables["latitude"][:]
@@ -26,7 +26,7 @@ october_data = precip_data[october_indices, :, :]
 october_lat_lon_data = october_data[:, lat_indices, :][:, :, lon_indices]
 
 # Create a new netCDF file to save the filtered data
-output_nc_file = "chirps_octobers_middle_east_1981_2010.nc"
+output_nc_file = "chirps_octobers_middle_east_1981_2010_option3.nc"
 nc_output = nc.Dataset(output_nc_file, "w", format="NETCDF4")
 
 nc_output.createDimension("time", len(october_indices))
