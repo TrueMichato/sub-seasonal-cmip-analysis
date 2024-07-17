@@ -4,7 +4,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import cartopy.crs as ccrs
 import cartopy.feature as cfeature
-from scipy import interpolate
 import scipy
 import tqdm
 import matplotlib.colors as mcolors
@@ -18,8 +17,45 @@ def scale_chirps(target_dim: tuple, chirps_precip: np.ndarray) -> tuple:
     chirps_precip = scipy.ndimage.zoom(np.mean(chirps_precip_data, axis=0), scale_factors, order=1)  # order=1 for bilinear
     return chirps_precip
 
+def precip_processing(data: np.ndarray, target_dim: tuple, unit_conversion: float, bounds_lat: list, bounds_lon: list, interpolate: bool, force_grid: tuple) -> np.ndarray:
+    # Unit Conversion
+    precipitation = data.variables['pr'][:]
+    avg_pr_middle_east = np.mean(precipitation, axis=0)
 
-def collect_all_datasets(precipitation_dir: str, target_dim: tuple, unit_conversion: float, bounds_lat: list, bounds_lon: list) -> dict:
+    mm_avg_lat_lon = avg_pr_middle_east * unit_conversion
+
+    res_mat = mm_avg_lat_lon
+    if interpolate:
+        m, n = res_mat.shape if not force_grid else force_grid
+
+        lat_grid = np.linspace(bounds_lat[0], bounds_lat[1], m)
+        lon_grid = np.linspace(bounds_lon[0], bounds_lon[1], n)
+#         print(f"{lat_grid=}\n{lon_grid=}")
+
+        # Interpolation
+        if m > target_dim[0] or n > target_dim[1]:
+            # Downsample the matrix using bilinear interpolation
+            scale_factors = target_dim[0] / m, target_dim[1] / n
+            res_mat = scipy.ndimage.zoom(original_matrix, scale_factors, order=1)  # order=1 for bilinear
+
+
+        else:
+            # Upsample the matrix
+            interpolator = scipy.interpolate.RegularGridInterpolator((lat_grid, lon_grid), mm_avg_lat_lon, method='slinear')
+
+            new_lat_grid = np.linspace(bounds_lat[0], bounds_lat[1], target_dim[0])
+            new_lon_grid = np.linspace(bounds_lon[0], bounds_lon[1], target_dim[1])
+
+            new_grid_points = np.meshgrid(new_lat_grid, new_lon_grid, indexing='ij')
+
+            new_points = np.stack([new_grid_points[0].ravel(), new_grid_points[1].ravel()], axis=-1)
+
+            res_mat = interpolator(new_points).reshape(target_dim)
+    return np.array(res_mat)
+    
+
+
+def collect_all_datasets(dir_path: str, data_type: str, target_dim: tuple = None, unit_conversion: float= None, bounds_lat: list= None, bounds_lon: list= None, interpolate: bool = False, force_grid: tuple = False) -> dict:
     """
     Collects and processes all NetCDF files from the given directory.
     Interpolates each dataset to a predefined dimension and stores them in a 3D array.
@@ -34,47 +70,19 @@ def collect_all_datasets(precipitation_dir: str, target_dim: tuple, unit_convers
     Returns:
         np.ndarray: 3D array of interpolated datasets.
     """
-    interpolated_matrices = dict()
+    output = dict()
 
-    for file in tqdm.tqdm(os.listdir(precipitation_dir)):
+    for file in tqdm.tqdm(os.listdir(dir_path)):
         filename = os.fsdecode(file)
-        path = f"{precipitation_dir}/{filename}"
+        path = f"{dir_path}/{filename}"
         data = nc.Dataset(path)
         print(f"{filename}")
         
-        precipitation = data.variables['pr'][:]
-        avg_pr_middle_east = np.mean(precipitation, axis=0)
-        
-        mm_avg_lat_lon = avg_pr_middle_east * unit_conversion
-        
-        original_matrix = mm_avg_lat_lon
-        m, n = original_matrix.shape
-        
-        lat_grid = np.linspace(bounds_lat[0], bounds_lat[1], m)
-        lon_grid = np.linspace(bounds_lon[0], bounds_lon[1], n)
-        
-        if m > target_dim[0] or n > target_dim[1]:
-            # Downsample the matrix using bilinear interpolation
-            scale_factors = target_dim[0] / m, target_dim[1] / n
-            interpolated_matrix = scipy.ndimage.zoom(original_matrix, scale_factors, order=1)  # order=1 for bilinear
-
-            
+        if data_type == 'precip':
+            output[filename.split("_")[2]] = precip_processing(data, target_dim, unit_conversion, bounds_lat, bounds_lon, interpolate, force_grid)
         else:
-            # Upsample the matrix
-            interpolator = interpolate.RegularGridInterpolator((lat_grid, lon_grid), original_matrix, method='slinear')
-
-            new_lat_grid = np.linspace(bounds_lat[0], bounds_lat[1], target_dim[0])
-            new_lon_grid = np.linspace(bounds_lon[0], bounds_lon[1], target_dim[1])
-
-            new_grid_points = np.meshgrid(new_lat_grid, new_lon_grid, indexing='ij')
-
-            new_points = np.stack([new_grid_points[0].ravel(), new_grid_points[1].ravel()], axis=-1)
-
-            interpolated_matrix = interpolator(new_points).reshape(target_dim)
-        
-        interpolated_matrices[filename] = np.array(interpolated_matrix)
-
-    return interpolated_matrices
+            output[filename.split("_")[2]] = data
+    return output
 
 
 ##############################################################################################################################
@@ -91,7 +99,7 @@ def calc_dmi_precp_corr_loop(dmi: np.ndarray, precip: np.ndarray) -> np.ndarray:
             precip_series = precip[:, i, j]
 
             # Compute the correlation coefficient between DMI and the current grid point's time series
-            if any(item == np.nan for item in precip_series):
+            if np.any([item != item for item in precip_series]):
                 correlation_map[i, j] = np.nan
             elif np.std(precip_series) == 0:
             # Set the correlation to NaN for constant series
@@ -102,58 +110,13 @@ def calc_dmi_precp_corr_loop(dmi: np.ndarray, precip: np.ndarray) -> np.ndarray:
     return correlation_map
 
 
-
 def calc_dmi_precp_corr_vec(dmi: np.ndarray, precip: np.ndarray) -> np.ndarray:
-    # Reshape precipitation data from (30, 600, 600) to (30, 360000)
-    # Each column represents a grid point's time series
+    B_reshaped = dmi[:, np.newaxis, np.newaxis] 
 
-#     # Step 1: Detrend the DMI to ensure no linear trend affects correlation
-#     dmi_detrended = dmi - np.mean(dmi)
-
-#     # Step 2: Detrend the precipitation data for each grid point
-#     precip_detrended = precip - np.mean(precip, axis=0)
-
-#     # Step 3: Normalize the detrended data
-#     dmi_normalized = dmi_detrended / np.std(dmi_detrended)
-
-#     # Step 4: Normalize the precipitation data along the time axis
-#     precip_normalized = precip_detrended / np.std(precip_detrended, axis=0)
-
-#     # Step 5: Compute the correlation coefficient across all grid points in one operation
-#     # Dot product between normalized DMI and normalized precipitation for each grid point
-#     correlation_map = np.tensordot(dmi_normalized, precip_normalized, axes=1) / (len(dmi) - 1)
-    reshaped_precip = precip.reshape(dmi.shape[0], -1)
-
-    # Calculate the mean and standard deviation of the reshaped chirps
-    mean_precip = np.mean(reshaped_precip, axis=0)
-    # Check for constant time series
-    nan_mask = np.any(np.isnan(reshaped_precip), axis=0)
-    std_precip = np.nanstd(reshaped_precip, axis=0)
-    constant_series_mask = (std_precip == 0)
-
-    # Combine masks to get final invalid mask
-    invalid_mask = nan_mask | constant_series_mask
-
-    # Compute the normalized (zero mean, unit variance) time series
-    normalized_precip = (reshaped_precip - mean_precip) / std_precip
-
-    # Calculate the mean and standard deviation of `dmi`
-    mean_dmi = np.mean(dmi)
-    std_dmi = np.std(dmi)
-
-    # Normalize `dmi`
-    normalized_dmi = (dmi - mean_dmi) / std_dmi
-
-    # Compute the correlation for non-constant time series
-    correlation_flat = np.dot(normalized_precip.T, normalized_dmi) / (dmi.shape[0] - 1)
-
-    # Replace correlations for constant series with NaN
-    correlation_flat[invalid_mask] = np.nan
-
-    # Reshape back to (400, 600)
-    correlations = correlation_flat.reshape(precip.shape[1], precip.shape[2])
-    return correlations
-
+    # Calculate the correlation
+    correlations = np.sum((precip - precip.mean(axis=0, keepdims=True)) * (B_reshaped - dmi.mean(axis=0, keepdims=True)), axis=0) / \
+                   (dmi.shape[0] * precip.std(axis=0, keepdims=True) * dmi.std(axis=0, keepdims=True))
+    return np.squeeze(correlations)
 
 
 def calc_corr_t_test(r: float, n: int = 30):

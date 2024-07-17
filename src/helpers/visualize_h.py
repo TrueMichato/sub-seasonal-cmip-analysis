@@ -57,7 +57,7 @@ def plot_corr_heatmap(ax, mat: np.ndarray, boundaries: list, label: str, title: 
 
     # Set alpha (transparency) between -0.1 and 0.1
     midpoint = np.linspace(0, 1, 256)
-    transparent_cmap[(midpoint > 0.45) & (midpoint < 0.55), -1] = 0  # Make the middle range transparent
+    transparent_cmap[(midpoint > 0.48) & (midpoint < 0.52), -1] = 0  # Make the middle range transparent
 
     # Create the custom colormap
     transparent_cmap = mcolors.ListedColormap(transparent_cmap)
