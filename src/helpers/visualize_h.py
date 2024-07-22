@@ -30,7 +30,7 @@ def plot_precp_heatmap(ax, mat: np.ndarray, boundaries: list, label: str, title:
     cbar = plt.colorbar(im, ax=ax, label=label, orientation='horizontal', pad=0.05, fraction=0.046)
     cbar.set_label(label)
     ax.set_title(f"{title}")
-#     plt.show()
+    plt.show()
 
 
 def create_transparent_cmap():
