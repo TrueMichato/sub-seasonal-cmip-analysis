@@ -12,65 +12,111 @@ import matplotlib.colors as mcolors
     ########################################## for initial exploration part ##########################################
 ##############################################################################################################################
 def scale_chirps(target_dim: tuple, chirps_precip: np.ndarray) -> tuple:
-    "This function scales the CHIRPS data to the target dimension, currently not in use"
+    """This function scales the CHIRPS data to the target dimension, currently not in use"""
     scale_factors = target_dim[0] / chirps_precip_data.shape[1], target_dim[1] / chirps_precip_data.shape[2]
     chirps_precip = scipy.ndimage.zoom(np.mean(chirps_precip_data, axis=0), scale_factors, order=1)  # order=1 for bilinear
     return chirps_precip
 
-def precip_processing(data: np.ndarray, target_dim: tuple, unit_conversion: float, bounds_lat: list, bounds_lon: list, interpolate: bool, force_grid: tuple) -> np.ndarray:
+def precip_processing(data: np.ndarray, target_dim: tuple, unit_conversion: float, bounds_lat: list, bounds_lon: list, options: dict) -> np.ndarray:
+    """
+    Processes precipitation data by applying unit conversion and optional interpolation and averaging.
+
+    Args:
+        data (np.ndarray): The input dataset containing precipitation data.
+        target_dim (tuple): Target dimensions for the output matrix.
+        unit_conversion (float): Factor for converting units of precipitation.
+        bounds_lat (list): Latitude bounds for the data.
+        bounds_lon (list): Longitude bounds for the data.
+        options (dict): Processing options with keys 'interpolate', 'force grid', and 'average'.
+
+    Returns:
+        np.ndarray: Processed precipitation data, possibly interpolated to the target dimensions.
+    """
     # Unit Conversion
-    precipitation = data.variables['pr'][:]
-    avg_pr_middle_east = np.mean(precipitation, axis=0)
+    mat = data.variables['pr'][:]
+    if options.get("average"):
+        mat = np.mean(mat, axis=0)
 
-    mm_avg_lat_lon = avg_pr_middle_east * unit_conversion
+    converted = mat * unit_conversion
 
-    res_mat = mm_avg_lat_lon
-    if interpolate:
-        m, n = res_mat.shape if not force_grid else force_grid
+    res_mat = converted
+    print(res_mat.shape)
+    if options.get("interpolate"):
+        force_grid = options.get("force grid", False)
+        if force_grid:
+            m, n = force_grid
+        else:
+            m, n = res_mat.shape if mat.ndim == 2 else res_mat[0].shape
 
         lat_grid = np.linspace(bounds_lat[0], bounds_lat[1], m)
         lon_grid = np.linspace(bounds_lon[0], bounds_lon[1], n)
-#         print(f"{lat_grid=}\n{lon_grid=}")
+        if mat.ndim == 2:  # Interpolation for 2D matrix
+            # Interpolation
+            if m > target_dim[0] or n > target_dim[1]:
+                # Downsample the matrix using bilinear interpolation
+                scale_factors = target_dim[0] / m, target_dim[1] / n
+                res_mat = scipy.ndimage.zoom(res_mat, scale_factors, order=1)  # order=1 for bilinear
 
-        # Interpolation
-        if m > target_dim[0] or n > target_dim[1]:
-            # Downsample the matrix using bilinear interpolation
-            scale_factors = target_dim[0] / m, target_dim[1] / n
-            res_mat = scipy.ndimage.zoom(original_matrix, scale_factors, order=1)  # order=1 for bilinear
 
+            else:
+                # Upsample the matrix
+                interpolator = scipy.interpolate.RegularGridInterpolator((lat_grid, lon_grid), res_mat, method='slinear')
 
-        else:
-            # Upsample the matrix
-            interpolator = scipy.interpolate.RegularGridInterpolator((lat_grid, lon_grid), mm_avg_lat_lon, method='slinear')
+                new_lat_grid = np.linspace(bounds_lat[0], bounds_lat[1], target_dim[0])
+                new_lon_grid = np.linspace(bounds_lon[0], bounds_lon[1], target_dim[1])
 
-            new_lat_grid = np.linspace(bounds_lat[0], bounds_lat[1], target_dim[0])
-            new_lon_grid = np.linspace(bounds_lon[0], bounds_lon[1], target_dim[1])
+                new_grid_points = np.meshgrid(new_lat_grid, new_lon_grid, indexing='ij')
 
-            new_grid_points = np.meshgrid(new_lat_grid, new_lon_grid, indexing='ij')
+                new_points = np.stack([new_grid_points[0].ravel(), new_grid_points[1].ravel()], axis=-1)
 
-            new_points = np.stack([new_grid_points[0].ravel(), new_grid_points[1].ravel()], axis=-1)
-
-            res_mat = interpolator(new_points).reshape(target_dim)
+                res_mat = interpolator(new_points).reshape(target_dim)
+         
+        elif mat.ndim == 3:  # Interpolation for 3D matrix
+            interpolated_slices = []
+            for slice_2d in res_mat:
+                if slice_2d.shape != (m, n):
+                    raise ValueError(f"Shape mismatch: slice shape {slice_2d.shape} vs grid shape ({m}, {n})")
+                
+                if m > target_dim[0] or n > target_dim[1]:
+                    scale_factors = target_dim[0] / m, target_dim[1] / n
+                    interpolated_slice = scipy.ndimage.zoom(slice_2d, scale_factors, order=1)
+                else:
+                    interpolator = scipy.interpolate.RegularGridInterpolator((lat_grid, lon_grid), slice_2d, method='slinear')
+                    new_lat_grid = np.linspace(bounds_lat[0], bounds_lat[1], target_dim[0])
+                    new_lon_grid = np.linspace(bounds_lon[0], bounds_lon[1], target_dim[1])
+                    new_grid_points = np.meshgrid(new_lat_grid, new_lon_grid, indexing='ij')
+                    new_points = np.stack([new_grid_points[0].ravel(), new_grid_points[1].ravel()], axis=-1)
+                    interpolated_slice = interpolator(new_points).reshape(target_dim)
+                
+                interpolated_slices.append(interpolated_slice)
+            
+            res_mat = np.array(interpolated_slices)
     return np.array(res_mat)
     
 
 
-def collect_all_datasets(dir_path: str, data_type: str, target_dim: tuple = None, unit_conversion: float= None, bounds_lat: list= None, bounds_lon: list= None, interpolate: bool = False, force_grid: tuple = False) -> dict:
+def collect_all_datasets(dir_path: str, data_type: str, target_dim: tuple = None, unit_conversion: float= None, bounds_lat: list= None, bounds_lon: list= None, options: dict=None) -> dict:
     """
-    Collects and processes all NetCDF files from the given directory.
-    Interpolates each dataset to a predefined dimension and stores them in a 3D array.
-    
+    Collects and processes all NetCDF files from the specified directory.
+
     Args:
-        precipitation_path (str): Path to the directory containing NetCDF files.
-        target_dim (tuple): Dimensions of the target matrix.
-        unit_conversion (float): Unit conversion factor.
-        bounds_lat (list): Latitude bounds.
-        bounds_lon (list): Longitude bounds.
-    
+        dir_path (str): Path to the directory containing NetCDF files.
+        data_type (str): Type of data to process ('precip' for precipitation).
+        target_dim (tuple, optional): Target dimensions for interpolation.
+        unit_conversion (float, optional): Factor for unit conversion.
+        bounds_lat (list, optional): Latitude bounds for the data.
+        bounds_lon (list, optional): Longitude bounds for the data.
+        options (dict, optional): Processing options with keys 'interpolate', 'force grid', and 'average'.
+
     Returns:
-        np.ndarray: 3D array of interpolated datasets.
+        dict: A dictionary containing processed datasets or raw data.
     """
     output = dict()
+    
+    if not options:
+        options = {"interpolate": False,
+                   "force grid": False,
+                   "average": False}
 
     for file in tqdm.tqdm(os.listdir(dir_path)):
         filename = os.fsdecode(file)
@@ -79,7 +125,9 @@ def collect_all_datasets(dir_path: str, data_type: str, target_dim: tuple = None
         print(f"{filename}")
         
         if data_type == 'precip':
-            output[filename.split("_")[2]] = precip_processing(data, target_dim, unit_conversion, bounds_lat, bounds_lon, interpolate, force_grid)
+            name_lat = 'lat' if 'lat' in data.variables.keys() else 'latitude'
+            name_lon = 'lon' if 'lon' in data.variables.keys() else 'longitude'
+            output[filename.split("_")[2]] = (precip_processing(data, target_dim, unit_conversion, bounds_lat, bounds_lon, options), data.variables[name_lat][:], data.variables[name_lon][:])
         else:
             output[filename.split("_")[2]] = data
     return output
@@ -129,7 +177,86 @@ def calc_corr_t_test(r: float, n: int = 30):
     
 
 
+def calc_dmi(wtio: dict, seio: dict, calc_type: str='baseline') -> dict:
+    dmi = dict()
+    for key in tqdm.tqdm(wtio.keys()):
+        wtio_model = wtio[key].variables['tos'][:]
+        seio_model = seio[key].variables['tos'][:]
+        if calc_type == 'baseline':
+            wtio_reshape = wtio_model.reshape(30, -1)
+            seio_reshape = seio_model.reshape(30, -1)
+            wtio_mean = np.nanmean(wtio_reshape, axis=1)
+            seio_mean = np.nanmean(seio_reshape, axis=1)
+            dmi[key] = (wtio_mean - seio_mean) - np.nanmean(wtio_mean - seio_mean)
+        elif calc_type == 'anomaly grid - mean last':
+            wtio_climatology = np.nanmean(wtio_model, axis=0)
+            seio_climatology = np.nanmean(seio_model, axis=0)
+            wtio_anomaly = wtio_model - wtio_climatology
+            seio_anomaly = seio_model - seio_climatology
+            dmi[key] = np.nanmean((wtio_anomaly - seio_anomaly).reshape(30, -1), axis=1)
+        elif calc_type == 'anomaly grid - mean first':
+            wtio_climatology = np.nanmean(wtio_model, axis=0)
+            seio_climatology = np.nanmean(seio_model, axis=0)
+            wtio_anomaly = (wtio_model - wtio_climatology).reshape(30, -1)
+            seio_anomaly = (seio_model - seio_climatology).reshape(30, -1)
+            dmi[key] = np.nanmean(wtio_anomaly, axis=1) - np.nanmean(seio_anomaly, axis=1)
+            
+        # caluate sst anomaly for each grid, then either subtruct grids then means means then subtruct means
+    return dmi
 
+def signed_diff(baseline: np.ndarray, test: np.ndarray) -> np.ndarray:
+    # Signed difference
+    signed_diff = baseline - test
 
+    # Sign change indicator
+    sign_change = np.sign(baseline) != np.sign(test)
 
+    # Combine signed difference with sign change information
+    # Here, we multiply the signed difference by 2 if there is a sign change to emphasize it
+    modified_diff = signed_diff + (sign_change * signed_diff)
+    return modified_diff
 
+def my_sign(x):
+    signed = np.sign(x)
+    signed[signed == 0] = 1
+    return signed
+ 
+def create_corr_diff_mats(baseline, corrs):
+    mats = [(np.abs(baseline - arr), my_sign(baseline) != my_sign(arr)) for arr in list(corrs.values())]
+    combined = []
+    for mat in mats:
+        same_sign_diff = np.where(~mat[1], mat[0], np.nan)
+        different_sign_diff = np.where(mat[1], mat[0], np.nan)
+        combined.append((same_sign_diff, different_sign_diff))
+    titles = list(corrs.keys())
+    return combined, titles
+
+def calc_iod_precp_effect(iod_pos_neg, precip):
+    pos = np.mean(precip[iod_pos_neg], axis=0)
+    neg = np.mean(precip[~iod_pos_neg], axis=0)
+    return pos - neg
+
+def slp_process(slp):
+    slp_p = dict()
+    for key in slp.keys():
+        if 'psl' in slp[key].variables.keys():
+            slp_p[key] = slp[key]['psl'][:]
+        else:
+            slp_p[key] = np.squeeze(slp[key]['zg'][:], axis=1)
+    return slp_p
+
+def gph_process(gph):
+    gph_p = dict()
+    for key in gph.keys():
+        gph_p[key] = np.squeeze(gph[key]['zg'][:], axis=1)
+    return gph_p
+
+def calc_iod_slp_effect(iod_pos_neg, slp):
+    pos = np.mean(slp[iod_pos_neg], axis=0)
+    neg = np.mean(slp[~iod_pos_neg], axis=0)
+    return pos - neg
+
+def calc_iod_gph_effect(iod_pos_neg, gph):
+    pos = np.mean(gph[iod_pos_neg], axis=0)
+    neg = np.mean(gph[~iod_pos_neg], axis=0)
+    return pos - neg
