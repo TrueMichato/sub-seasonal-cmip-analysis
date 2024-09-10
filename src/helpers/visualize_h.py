@@ -9,6 +9,9 @@ import scipy
 import tqdm
 import matplotlib.colors as mcolors
 import skill_metrics as sm
+from adjustText import adjust_text
+import seaborn as sns
+
 
 
 def plot_precp_heatmap(ax, mat: np.ndarray, boundaries: list, label: str, title: str, treshold: float = 0.05) -> None:
@@ -195,7 +198,59 @@ def plot_taylor(stds, rmsds, avg_corrs, labels):
                      markerobs = 'o', titleOBS = 'Ref',
                       titleSTD ='on',
                      alpha = 0)
+    
+def plot_SAL(sal_scores: dict, title: str):
+    models = list(sal_scores.keys())
+    data = list(sal_scores.values())
+    # Separate the data into S, A, and L
+    S, A, L = zip(*data)
+    # replace nan values
+    L = [x if not np.isnan(x) else 2 for x in L]
+    S = [x if not np.isnan(x) else -2 for x in S]
 
+    # Create the scatter plot
+    plt.figure(figsize=(12, 10))
+    scatter = plt.scatter(S, A, c=L, cmap='viridis', vmin=0, vmax=2, s=50)
+
+    # Set the axis limits
+    plt.xlim(-2, 2)
+    plt.ylim(-2, 2)
+    plt.axhline(0, color='k', linewidth=1)
+    plt.axvline(0, color='k', linewidth=1)
+
+    # Add labels and title
+    plt.xlabel('S', fontweight='bold')
+    plt.ylabel('A', fontweight='bold')
+    plt.title(title)
+
+    # Add a color bar
+    cbar = plt.colorbar(scatter)
+    cbar.set_label('L')
+
+    # Create annotations
+    texts = []
+    for i, model in enumerate(models):
+        texts.append(plt.text(S[i], A[i], model, fontsize=8))
+
+    # Adjust text positions to minimize overlaps
+    adjust_text(texts, arrowprops=dict(arrowstyle='->', color='red', lw=0.5))
+
+    # Add grid lines
+    plt.grid(True, linestyle='--', alpha=0.7)
+
+    # Show the plot
+    plt.tight_layout()
+    plt.show()
+
+def create_regular_SAL_table(sal_scores):
+    res =pd.DataFrame(sal_scores, index=["S", "A", "L"]).T
+    res.sort_index(inplace=True)
+    plt.figure(figsize=(8,12))
+    plt.title("SAL Scores Results")
+    ax = sns.heatmap(res, annot=True, cmap='coolwarm', vmin=-2, vmax=2, center=0)
+    ax.xaxis.tick_top()
+    plt.show()
+    
     
 from mpl_toolkits.basemap import Basemap
 import cartopy.crs as ccrs

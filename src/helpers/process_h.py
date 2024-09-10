@@ -260,3 +260,66 @@ def calc_iod_gph_effect(iod_pos_neg, gph):
     pos = np.mean(gph[iod_pos_neg], axis=0)
     neg = np.mean(gph[~iod_pos_neg], axis=0)
     return pos - neg
+
+def compute_SAL(Rmod, Robs, domain):
+    # Domain information
+    N = domain.size
+    d = np.linalg.norm(np.array(domain.shape) - 1)  # Largest distance between boundary points in domain
+
+    # Amplitude component (A)
+    D_mod = np.mean(Rmod[domain==1])
+    D_obs = np.mean(Robs[domain==1])
+    A = (D_mod - D_obs) / (0.5 * (D_mod + D_obs))
+    A = np.clip(A, -2, 2)
+
+    # Location component (L)
+    x_mod = np.array(np.unravel_index(np.argmax(Rmod), Rmod.shape)).mean(axis=0)  # Center of mass for Rmod
+    x_obs = np.array(np.unravel_index(np.argmax(Robs), Robs.shape)).mean(axis=0)  # Center of mass for Robs
+    L1 = np.linalg.norm(x_mod - x_obs) / d  # Normalized distance between centers of mass
+
+    objects_mod = identify_objects(Rmod)
+    objects_obs = identify_objects(Robs)
+
+    r_mod = compute_weighted_distance(Rmod, objects_mod)
+    r_obs = compute_weighted_distance(Robs, objects_obs)
+    L2 = 2 * np.abs(r_mod - r_obs) / d  # Scaled and normalized
+
+    L = L1 + L2  # Total location component
+
+    # Structure component (S)
+    V_mod = compute_scaled_volume(Rmod, objects_mod)
+    V_obs = compute_scaled_volume(Robs, objects_obs)
+    S = (V_mod - V_obs) / (0.5 * (V_mod + V_obs))
+
+    return S, A, L
+
+def identify_objects(R, threshold_factor=1/15):
+    # Here we make no assumptions about the existence of objects in the data - every grid point can belong to an object
+    max_R = np.max(R)
+    threshold = threshold_factor * max_R
+    objects = (R >= threshold)
+    return objects
+
+def compute_weighted_distance(R, objects):
+    # Get the indices of all grid points where "objects" is True
+    object_indices = np.array(np.nonzero(objects))  # shape will be (2, num_objects)
+    
+    # Compute total precipitation for normalization
+    total_precip = np.sum(R[objects])
+    
+    # Calculate the weighted center of mass for the object
+    weighted_positions = np.sum(object_indices * R[objects], axis=1) / total_precip
+    
+    # Compute the weighted distance of all object grid points to the center of mass
+    distances = np.linalg.norm(object_indices.T - weighted_positions, axis=1)
+    weighted_distances = np.sum(distances * R[objects]) / total_precip
+    
+    return weighted_distances
+
+
+def compute_scaled_volume(R, objects):
+    max_R = np.max(R[objects])
+    scaled_volume = np.sum(R[objects]) / max_R  # Scaled precipitation volume
+    if np.isnan(scaled_volume):
+        print(f"{max_R=}, {np.sum(R[objects])=}, {scaled_volume=}")
+    return scaled_volume
