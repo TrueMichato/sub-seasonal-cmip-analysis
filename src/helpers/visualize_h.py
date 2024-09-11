@@ -242,13 +242,36 @@ def plot_SAL(sal_scores: dict, title: str):
     plt.tight_layout()
     plt.show()
 
-def create_regular_SAL_table(sal_scores):
-    res =pd.DataFrame(sal_scores, index=["S", "A", "L"]).T
+def create_agg_SAL_table(sal_scores):
+    res = pd.DataFrame(sal_scores, index=["S", "A", "L"]).T
     res.sort_index(inplace=True)
     plt.figure(figsize=(8,12))
-    plt.title("SAL Scores Results")
+    plt.title("SAL Scores Results - Averaged Scores")
     ax = sns.heatmap(res, annot=True, cmap='coolwarm', vmin=-2, vmax=2, center=0)
     ax.xaxis.tick_top()
+    plt.show()
+
+def create_verbose_SAL_table(sal_scores_cor, sal_scores_precip, sal_scores_pos_neg, sal_scores_mslp, sal_scores_gph500):
+    res_cor = pd.DataFrame(sal_scores_cor, index=["S", "A", "L"]).T
+    res_precip = pd.DataFrame(sal_scores_precip, index=["S", "A", "L"]).T
+    res_pos_neg = pd.DataFrame(sal_scores_pos_neg, index=["S", "A", "L"]).T
+    res_mslp = pd.DataFrame(sal_scores_mslp, index=["S", "A", "L"]).T
+    res_gph500 = pd.DataFrame(sal_scores_gph500, index=["S", "A", "L"]).T
+    
+    res_cor.columns = pd.MultiIndex.from_product([['Correlations SAL'], res_cor.columns])
+    res_precip.columns = pd.MultiIndex.from_product([['Precipitation SAL'], res_precip.columns])
+    res_pos_neg.columns = pd.MultiIndex.from_product([['DMI effect on POS SAL'], res_pos_neg.columns])
+    res_mslp.columns = pd.MultiIndex.from_product([['DMI effect on MSLP SAL'], res_mslp.columns])
+    res_gph500.columns = pd.MultiIndex.from_product([['DMI effect on Z500 SAL'], res_gph500.columns])
+
+    # Concatenate the DataFrames horizontally
+    final_df = pd.concat([res_cor, res_precip, res_pos_neg, res_mslp, res_gph500], axis=1)
+    final_df.sort_index(inplace=True)
+    plt.figure(figsize=(8,12))
+    plt.title("SAL Scores Results - By Data Type")
+    ax = sns.heatmap(final_df, annot=True, cmap='coolwarm', vmin=-2, vmax=2, center=0)
+    ax.xaxis.tick_top()
+    ax.set_xticklabels(ax.get_xticklabels(), rotation=-45)
     plt.show()
     
     
