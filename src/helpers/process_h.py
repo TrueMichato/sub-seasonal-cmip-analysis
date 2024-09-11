@@ -8,14 +8,72 @@ import scipy
 import tqdm
 import matplotlib.colors as mcolors
 # import pandas as pd
+
+
+VAR_NAME = {'precip': 'pr',
+           'slp': 'psl',
+           'gph500': 'zg'}
 ##############################################################################################################################
     ########################################## for initial exploration part ##########################################
 ##############################################################################################################################
-def scale_chirps(target_dim: tuple, chirps_precip: np.ndarray) -> tuple:
-    """This function scales the CHIRPS data to the target dimension, currently not in use"""
-    scale_factors = target_dim[0] / chirps_precip_data.shape[1], target_dim[1] / chirps_precip_data.shape[2]
-    chirps_precip = scipy.ndimage.zoom(np.mean(chirps_precip_data, axis=0), scale_factors, order=1)  # order=1 for bilinear
-    return chirps_precip
+# def scale_chirps(target_dim: tuple, chirps_precip: np.ndarray) -> tuple:
+#     """This function scales the CHIRPS data to the target dimension, currently not in use"""
+#     scale_factors = target_dim[0] / chirps_precip_data.shape[1], target_dim[1] / chirps_precip_data.shape[2]
+#     chirps_precip = scipy.ndimage.zoom(np.mean(chirps_precip_data, axis=0), scale_factors, order=1)  # order=1 for bilinear
+#     return chirps_precip
+
+def interpolate_data(mat: np.ndarray, target_dim: tuple, bounds_lat: list, bounds_lon: list, options: dict) -> np.ndarray:
+    res_mat = mat
+    force_grid = options.get("force grid", False)
+    if force_grid:
+        m, n = force_grid
+    else:
+        m, n = res_mat.shape if mat.ndim == 2 else res_mat[0].shape
+
+    lat_grid = np.linspace(bounds_lat[0], bounds_lat[1], m)
+    lon_grid = np.linspace(bounds_lon[0], bounds_lon[1], n)
+    if mat.ndim == 2:  # Interpolation for 2D matrix
+        # Interpolation
+        if m > target_dim[0] or n > target_dim[1]:
+            # Downsample the matrix using bilinear interpolation
+            scale_factors = target_dim[0] / m, target_dim[1] / n
+            res_mat = scipy.ndimage.zoom(res_mat, scale_factors, order=1)  # order=1 for bilinear
+
+
+        else:
+            # Upsample the matrix
+            interpolator = scipy.interpolate.RegularGridInterpolator((lat_grid, lon_grid), res_mat, method='slinear')
+
+            new_lat_grid = np.linspace(bounds_lat[0], bounds_lat[1], target_dim[0])
+            new_lon_grid = np.linspace(bounds_lon[0], bounds_lon[1], target_dim[1])
+
+            new_grid_points = np.meshgrid(new_lat_grid, new_lon_grid, indexing='ij')
+
+            new_points = np.stack([new_grid_points[0].ravel(), new_grid_points[1].ravel()], axis=-1)
+
+            res_mat = interpolator(new_points).reshape(target_dim)
+        
+    elif mat.ndim == 3:  # Interpolation for 3D matrix
+        interpolated_slices = []
+        for slice_2d in res_mat:
+            if slice_2d.shape != (m, n):
+                raise ValueError(f"Shape mismatch: slice shape {slice_2d.shape} vs grid shape ({m}, {n})")
+            
+            if m > target_dim[0] or n > target_dim[1]:
+                scale_factors = target_dim[0] / m, target_dim[1] / n
+                interpolated_slice = scipy.ndimage.zoom(slice_2d, scale_factors, order=1)
+            else:
+                interpolator = scipy.interpolate.RegularGridInterpolator((lat_grid, lon_grid), slice_2d, method='slinear')
+                new_lat_grid = np.linspace(bounds_lat[0], bounds_lat[1], target_dim[0])
+                new_lon_grid = np.linspace(bounds_lon[0], bounds_lon[1], target_dim[1])
+                new_grid_points = np.meshgrid(new_lat_grid, new_lon_grid, indexing='ij')
+                new_points = np.stack([new_grid_points[0].ravel(), new_grid_points[1].ravel()], axis=-1)
+                interpolated_slice = interpolator(new_points).reshape(target_dim)
+            
+            interpolated_slices.append(interpolated_slice)
+        
+        res_mat = np.array(interpolated_slices)
+    return np.array(res_mat)
 
 def precip_processing(data: np.ndarray, target_dim: tuple, unit_conversion: float, bounds_lat: list, bounds_lon: list, options: dict) -> np.ndarray:
     """
@@ -91,6 +149,9 @@ def precip_processing(data: np.ndarray, target_dim: tuple, unit_conversion: floa
                 interpolated_slices.append(interpolated_slice)
             
             res_mat = np.array(interpolated_slices)
+
+    res_2 = interpolate_data(converted, target_dim, bounds_lat, bounds_lon, options)
+    assert np.array_equal(np.array(res_mat), res_2)
     return np.array(res_mat)
     
 
@@ -236,19 +297,28 @@ def calc_iod_precp_effect(iod_pos_neg, precip):
     neg = np.mean(precip[~iod_pos_neg], axis=0)
     return pos - neg
 
-def slp_process(slp):
+def slp_process(slp, target_dim: tuple, bounds_lat: list, bounds_lon: list, options: dict) -> dict: 
     slp_p = dict()
     for key in slp.keys():
         if 'psl' in slp[key].variables.keys():
-            slp_p[key] = slp[key]['psl'][:]
+            res = slp[key]['psl'][:]
+            if options.get("interpolate"):
+                res = interpolate_data(res, target_dim, bounds_lat, bounds_lon, options)
+            slp_p[key] = res
         else:
-            slp_p[key] = np.squeeze(slp[key]['zg'][:], axis=1)
+            res = np.squeeze(slp[key]['zg'][:])
+            if options.get("interpolate"):
+                res = interpolate_data(res, target_dim, bounds_lat, bounds_lon, options)
+            slp_p[key] = res
     return slp_p
 
-def gph_process(gph):
+def gph_process(gph, target_dim: tuple, bounds_lat: list, bounds_lon: list, options: dict) -> dict:
     gph_p = dict()
     for key in gph.keys():
-        gph_p[key] = np.squeeze(gph[key]['zg'][:], axis=1)
+        res = np.squeeze(gph[key]['zg'][:], axis=1)
+        if options.get("interpolate"):
+            res = interpolate_data(res, target_dim, bounds_lat, bounds_lon, options)
+        gph_p[key] = res
     return gph_p
 
 def calc_iod_slp_effect(iod_pos_neg, slp):
