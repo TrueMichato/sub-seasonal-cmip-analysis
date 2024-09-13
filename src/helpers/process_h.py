@@ -24,6 +24,8 @@ VAR_NAME = {'precip': 'pr',
 
 def interpolate_data(mat: np.ndarray, target_dim: tuple, bounds_lat: list, bounds_lon: list, options: dict) -> np.ndarray:
     res_mat = mat
+    np.ma.set_fill_value(res_mat, 0)
+    res_mat = res_mat.filled()
     force_grid = options.get("force grid", False)
     if force_grid:
         m, n = force_grid
