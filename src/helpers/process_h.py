@@ -7,6 +7,7 @@ import cartopy.feature as cfeature
 import scipy
 import tqdm
 import matplotlib.colors as mcolors
+from statsmodels.stats.multitest import multipletests
 # import pandas as pd
 
 
@@ -295,9 +296,39 @@ def create_corr_diff_mats(baseline, corrs):
     return combined, titles
 
 def calc_iod_precp_effect(iod_pos_neg, precip):
-    pos = np.mean(precip[iod_pos_neg], axis=0)
-    neg = np.mean(precip[~iod_pos_neg], axis=0)
-    return pos - neg
+    return test_means_diff(precip, iod_pos_neg)
+#     pos = np.mean(precip[iod_pos_neg], axis=0)
+#     neg = np.mean(precip[~iod_pos_neg], axis=0)
+#     return pos - neg
+
+def calc_iod_slp_effect(iod_pos_neg, slp):
+    return test_means_diff(slp, iod_pos_neg)
+#     pos = np.mean(slp[iod_pos_neg], axis=0)
+#     neg = np.mean(slp[~iod_pos_neg], axis=0)
+#     return pos - neg
+
+def calc_iod_gph_effect(iod_pos_neg, gph):
+    return test_means_diff(gph, iod_pos_neg)
+#     pos = np.mean(gph[iod_pos_neg], axis=0)
+#     neg = np.mean(gph[~iod_pos_neg], axis=0)
+#     return pos - neg
+
+def correct_pvals(pvals, method, alpha):
+    return multipletests(pvals, alpha=alpha, method=method)[1]
+
+def apply_multiple_correction(data, pvals, method, alpha):
+    corrected_pvals = correct_pvals(pvals, method, alpha)
+    return np.where(corrected_pvals.reshape(data.shape) > alpha, 0, data)
+    
+def test_means_diff(data, indices, alpha=0.05):
+    numerator = (np.mean(data[indices], axis=0) - np.mean(data[~indices], axis=0))
+    std_a = np.std(data[indices], axis=0) / data[indices].shape[0]
+    std_b = np.std(data[~indices], axis=0) / data[~indices].shape[0]
+    denominator = np.sqrt(std_a + std_b)
+    statistic = numerator / denominator
+    freedom = data[indices].shape[0] + data[~indices].shape[0]  - 2
+    p_values = 2 * (1 - scipy.stats.t.cdf(np.abs(statistic), freedom))
+    return apply_multiple_correction(numerator, p_values.flatten(), 'fdr_bh', alpha)
 
 def slp_process(slp, target_dim: tuple, bounds_lat: list, bounds_lon: list, options: dict) -> dict: 
     slp_p = dict()
@@ -323,15 +354,6 @@ def gph_process(gph, target_dim: tuple, bounds_lat: list, bounds_lon: list, opti
         gph_p[key] = res
     return gph_p
 
-def calc_iod_slp_effect(iod_pos_neg, slp):
-    pos = np.mean(slp[iod_pos_neg], axis=0)
-    neg = np.mean(slp[~iod_pos_neg], axis=0)
-    return pos - neg
-
-def calc_iod_gph_effect(iod_pos_neg, gph):
-    pos = np.mean(gph[iod_pos_neg], axis=0)
-    neg = np.mean(gph[~iod_pos_neg], axis=0)
-    return pos - neg
 
 def compute_SAL(Rmod, Robs, domain):
     # Domain information
