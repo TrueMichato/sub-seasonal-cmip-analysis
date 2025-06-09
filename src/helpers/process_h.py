@@ -295,20 +295,20 @@ def create_corr_diff_mats(baseline, corrs):
     titles = list(corrs.keys())
     return combined, titles
 
-def calc_iod_precp_effect(iod_pos_neg, precip):
-    return test_means_diff(precip, iod_pos_neg)
+def calc_iod_precp_effect(iod_pos_neg, precip, multip=True):
+    return test_means_diff(precip, iod_pos_neg, multip)
 #     pos = np.mean(precip[iod_pos_neg], axis=0)
 #     neg = np.mean(precip[~iod_pos_neg], axis=0)
 #     return pos - neg
 
-def calc_iod_slp_effect(iod_pos_neg, slp):
-    return test_means_diff(slp, iod_pos_neg)
+def calc_iod_slp_effect(iod_pos_neg, slp, multip=True):
+    return test_means_diff(slp, iod_pos_neg, multip)
 #     pos = np.mean(slp[iod_pos_neg], axis=0)
 #     neg = np.mean(slp[~iod_pos_neg], axis=0)
 #     return pos - neg
 
-def calc_iod_gph_effect(iod_pos_neg, gph):
-    return test_means_diff(gph, iod_pos_neg)
+def calc_iod_gph_effect(iod_pos_neg, gph, multip=True):
+    return test_means_diff(gph, iod_pos_neg, multip)
 #     pos = np.mean(gph[iod_pos_neg], axis=0)
 #     neg = np.mean(gph[~iod_pos_neg], axis=0)
 #     return pos - neg
@@ -319,16 +319,60 @@ def correct_pvals(pvals, method, alpha):
 def apply_multiple_correction(data, pvals, method, alpha):
     corrected_pvals = correct_pvals(pvals, method, alpha)
     return np.where(corrected_pvals.reshape(data.shape) > alpha, 0, data)
-    
-def test_means_diff(data, indices, alpha=0.05):
-    numerator = (np.mean(data[indices], axis=0) - np.mean(data[~indices], axis=0))
-    std_a = np.std(data[indices], axis=0) / data[indices].shape[0]
-    std_b = np.std(data[~indices], axis=0) / data[~indices].shape[0]
-    denominator = np.sqrt(std_a + std_b)
+
+def test_means_diff_simple(data1, data2, alpha=0.05, apply_multip=True, pre_avg=False):
+    if not pre_avg:
+        data1 = np.mean(data1, axis=0)
+        data2 = np.mean(data2, axis=0)
+    numerator = data1 - data2
+    var_a = np.var(data1, axis=0) / data1.shape[0]
+    var_b = np.var(data2, axis=0) / data2.shape[0]
+    denominator = np.sqrt(var_a + var_b)
     statistic = numerator / denominator
-    freedom = data[indices].shape[0] + data[~indices].shape[0]  - 2
+    freedom = ((var_a + var_b) ** 2) / ((((var_a / data1.shape[0]) ** 2) / (data1.shape[0] - 1)) + (((var_b / data2.shape[0]) ** 2) / (data2.shape[0] - 1)))
     p_values = 2 * (1 - scipy.stats.t.cdf(np.abs(statistic), freedom))
-    return apply_multiple_correction(numerator, p_values.flatten(), 'fdr_bh', alpha)
+    if apply_multip:
+        return apply_multiple_correction(numerator, p_values.flatten(), 'fdr_bh', alpha)
+    else:
+        return np.where(p_values.reshape(data1.shape) > alpha, 0, numerator)
+    
+    
+def test_means_diff(data, indices, alpha=0.05, apply_multip=True, sample_correlation=False):
+    """
+    Performs a t-test to compare the means of two groups in the data.
+    Assumes that the variance of both groups is known.
+    Args:
+        data (np.ndarray): The input dataset containing the data to be tested.
+        indices (np.ndarray): A boolean array indicating the group membership for the t-test.
+        alpha (float): Significance level for the test.
+        apply_multip (bool): Whether to apply multiple testing correction.
+    Returns:
+        np.ndarray: The t-statistic for the test, or the corrected values if apply_multip is True.
+    """
+    if not sample_correlation:
+        numerator = (np.mean(data[indices], axis=0) - np.mean(data[~indices], axis=0))
+        var_a = np.var(data[indices], axis=0) / data[indices].shape[0]
+        var_b = np.var(data[~indices], axis=0) / data[~indices].shape[0]
+        denominator = np.sqrt(var_a + var_b)
+        statistic = numerator / denominator
+    #     freedom = data[indices].shape[0] + data[~indices].shape[0]  - 2
+        freedom = ((var_a + var_b) ** 2) / ((((var_a /data[indices].shape[0]) **2) / (data[indices].shape[0] - 1)) + (((var_b / data[~indices].shape[0]) **2) / (data[~indices].shape[0] - 1)) )
+        p_values = 2 * (1 - scipy.stats.t.cdf(np.abs(statistic), freedom))
+        if apply_multip:
+            return apply_multiple_correction(numerator, p_values.flatten(), 'fdr_bh', alpha)
+        else:
+            return np.where(p_values.reshape(data.shape) > alpha, 0, numerator)
+    else:
+        numerator = np.mean(data[indices] - data[~indices], axis=0)
+        var = np.var(data[indices], axis=0) + np.var(data[~indices], axis=0) - 2 * np.cov(data[indices], data[~indices], rowvar=False)
+        denominator = np.sqrt(var / (data[indices].shape[0] + data[~indices].shape[0]))
+        statistic = numerator / denominator
+        freedom = data[indices].shape[0] + data[~indices].shape[0] - 2
+        p_values = 2 * (1 - scipy.stats.t.cdf(np.abs(statistic), freedom))
+        if apply_multip:
+            return apply_multiple_correction(numerator, p_values.flatten(), 'fdr_bh', alpha)
+        else:
+            return np.where(p_values.reshape(data.shape) > alpha, 0, numerator)
 
 def slp_process(slp, target_dim: tuple, bounds_lat: list, bounds_lon: list, options: dict) -> dict: 
     slp_p = dict()
@@ -337,12 +381,12 @@ def slp_process(slp, target_dim: tuple, bounds_lat: list, bounds_lon: list, opti
             res = slp[key]['psl'][:]
             if options.get("interpolate"):
                 res = interpolate_data(res, target_dim, bounds_lat, bounds_lon, options)
-            slp_p[key] = res
+            slp_p[key] = res / 100 # change units from pascal to hectopascal
         else:
             res = np.squeeze(slp[key]['zg'][:])
             if options.get("interpolate"):
                 res = interpolate_data(res, target_dim, bounds_lat, bounds_lon, options)
-            slp_p[key] = res
+            slp_p[key] = res / 100 # change units from pascal to hectopascal
     return slp_p
 
 def gph_process(gph, target_dim: tuple, bounds_lat: list, bounds_lon: list, options: dict) -> dict:
