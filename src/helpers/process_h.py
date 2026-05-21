@@ -8,6 +8,8 @@ import scipy
 import tqdm
 import matplotlib.colors as mcolors
 from statsmodels.stats.multitest import multipletests
+import pysteps
+
 # import pandas as pd
 
 
@@ -221,14 +223,67 @@ def calc_dmi_precp_corr_loop(dmi: np.ndarray, precip: np.ndarray) -> np.ndarray:
 
     return correlation_map
 
+# def detrend(func):
+#     def detrend_data(dmi: np.ndarray, precip: np.ndarray):
+#         dmi_detrended = scipy.signal.detrend(dmi, axis=0)
+#         precip_detrended = scipy.signal.detrend(precip, axis=0)
+#         print("Detrended!")
+#         return func(dmi_detrended, precip_detrended)
+#     return detrend_data
 
-def calc_dmi_precp_corr_vec(dmi: np.ndarray, precip: np.ndarray) -> np.ndarray:
-    B_reshaped = dmi[:, np.newaxis, np.newaxis] 
 
-    # Calculate the correlation
-    correlations = np.sum((precip - precip.mean(axis=0, keepdims=True)) * (B_reshaped - dmi.mean(axis=0, keepdims=True)), axis=0) / \
-                   (dmi.shape[0] * precip.std(axis=0, keepdims=True) * dmi.std(axis=0, keepdims=True))
-    return np.squeeze(correlations)
+def detrend(func):
+    def detrend_data(dmi: np.ndarray, precip: np.ndarray):
+        def masked_detrend(data_ma):
+            detrended = np.ma.copy(data_ma)
+            if not np.ma.is_masked(data_ma):
+                return scipy.signal.detrend(data_ma, axis=0)
+            valid_spatial_mask = ~data_ma.mask.any(axis=0)
+            valid_data = data_ma[:, valid_spatial_mask]
+            detrended_valid = scipy.signal.detrend(valid_data, axis=0)
+            detrended[:, valid_spatial_mask] = detrended_valid
+            return detrended
+        dmi_detrended = scipy.signal.detrend(dmi, axis=0)
+        precip_detrended = masked_detrend(precip)
+        
+        print("Detrended with Mask preserved!")
+        return func(dmi_detrended, precip_detrended)
+    return detrend_data
+
+@detrend
+def calc_dmi_precp_corr_vec(dmi: np.ndarray, precip: np.ma.MaskedArray) -> np.ndarray:
+    # Ensure dmi is aligned with the shape for broadcasting
+    # dmi shape: (time,) -> (time, 1, 1)
+    dmi_reshaped = dmi[:, np.newaxis, np.newaxis] 
+
+    # Use masked-aware operations
+    # np.ma.mean and np.ma.std automatically ignore masked values
+    precip_mean = precip.mean(axis=0, keepdims=True)
+    dmi_mean = dmi.mean() # dmi is usually 1D time series
+    
+    precip_std = precip.std(axis=0, keepdims=True)
+    dmi_std = dmi.std()
+
+    # The numerator: Covariance-like sum
+    # Masked arrays will propagate the mask during subtraction and multiplication
+    numerator = np.ma.sum((precip - precip_mean) * (dmi_reshaped - dmi_mean), axis=0)
+    
+    # The denominator: 
+    # count() returns the number of non-masked elements for each pixel
+    n_counts = precip.count(axis=0) 
+    denominator = n_counts * precip_std * dmi_std
+
+    correlations = numerator / denominator
+    return np.squeeze(correlations.filled(np.nan))
+
+
+# def calc_dmi_precp_corr_vec(dmi: np.ndarray, precip: np.ndarray) -> np.ndarray:
+#     B_reshaped = dmi[:, np.newaxis, np.newaxis] 
+
+#     # Calculate the correlation
+#     correlations = np.sum((precip - precip.mean(axis=0, keepdims=True)) * (B_reshaped - dmi.mean(axis=0, keepdims=True)), axis=0) / \
+#                    (dmi.shape[0] * precip.std(axis=0, keepdims=True) * dmi.std(axis=0, keepdims=True))
+#     return np.squeeze(correlations)
 
 
 def calc_corr_t_test(r: float, n: int = 30):
@@ -399,65 +454,289 @@ def gph_process(gph, target_dim: tuple, bounds_lat: list, bounds_lon: list, opti
     return gph_p
 
 
-def compute_SAL(Rmod, Robs, domain):
-    # Domain information
-    N = domain.size
-    d = np.linalg.norm(np.array(domain.shape) - 1)  # Largest distance between boundary points in domain
+# def compute_SAL(Rmod, Robs, domain):
+#     # Domain information
+#     N = domain.size
+#     d = np.linalg.norm(np.array(domain.shape) - 1)  # Largest distance between boundary points in domain
 
-    # Amplitude component (A)
-    D_mod = np.mean(Rmod[domain==1])
-    D_obs = np.mean(Robs[domain==1])
-    A = (D_mod - D_obs) / (0.5 * (D_mod + D_obs))
-    A = np.clip(A, -2, 2)
+#     # Amplitude component (A)
+#     D_mod = np.mean(Rmod[domain==1])
+#     D_obs = np.mean(Robs[domain==1])
+#     A = (D_mod - D_obs) / (0.5 * (D_mod + D_obs))
+#     A = np.clip(A, -2, 2)
 
-    # Location component (L)
-    x_mod = np.array(np.unravel_index(np.argmax(Rmod), Rmod.shape)).mean(axis=0)  # Center of mass for Rmod
-    x_obs = np.array(np.unravel_index(np.argmax(Robs), Robs.shape)).mean(axis=0)  # Center of mass for Robs
-    L1 = np.linalg.norm(x_mod - x_obs) / d  # Normalized distance between centers of mass
+#     # Location component (L)
+#     x_mod = np.array(np.unravel_index(np.argmax(Rmod), Rmod.shape)).mean(axis=0)  # Center of mass for Rmod
+#     x_obs = np.array(np.unravel_index(np.argmax(Robs), Robs.shape)).mean(axis=0)  # Center of mass for Robs
+#     L1 = np.linalg.norm(x_mod - x_obs) / d  # Normalized distance between centers of mass
 
-    objects_mod = identify_objects(Rmod)
-    objects_obs = identify_objects(Robs)
+#     objects_mod = identify_objects(Rmod)
+#     objects_obs = identify_objects(Robs)
 
-    r_mod = compute_weighted_distance(Rmod, objects_mod)
-    r_obs = compute_weighted_distance(Robs, objects_obs)
-    L2 = 2 * np.abs(r_mod - r_obs) / d  # Scaled and normalized
+#     r_mod = compute_weighted_distance(Rmod, objects_mod)
+#     r_obs = compute_weighted_distance(Robs, objects_obs)
+#     L2 = 2 * np.abs(r_mod - r_obs) / d  # Scaled and normalized
 
-    L = L1 + L2  # Total location component
+#     L = L1 + L2  # Total location component
 
-    # Structure component (S)
-    V_mod = compute_scaled_volume(Rmod, objects_mod)
-    V_obs = compute_scaled_volume(Robs, objects_obs)
-    S = (V_mod - V_obs) / (0.5 * (V_mod + V_obs))
+#     # Structure component (S)
+#     V_mod = compute_scaled_volume(Rmod, objects_mod)
+#     V_obs = compute_scaled_volume(Robs, objects_obs)
+#     S = (V_mod - V_obs) / (0.5 * (V_mod + V_obs))
 
+#     return S, A, L
+
+# def identify_objects(R, threshold_factor=1/15):
+#     # Here we make no assumptions about the existence of objects in the data - every grid point can belong to an object
+#     max_R = np.max(R)
+#     threshold = threshold_factor * max_R
+#     objects = (R >= threshold)
+#     return objects if not np.ma.is_masked(objects) else objects.data
+
+# def compute_weighted_distance(R, objects):
+#     # Get the indices of all grid points where "objects" is True
+#     object_indices = np.array(np.nonzero(objects))  # shape will be (2, num_objects)
+    
+#     # Compute total precipitation for normalization
+#     total_precip = np.sum(R[objects])
+    
+#     # Calculate the weighted center of mass for the object
+#     weighted_positions = np.sum(object_indices * R[objects], axis=1) / total_precip
+    
+#     # Compute the weighted distance of all object grid points to the center of mass
+#     distances = np.linalg.norm(object_indices.T - weighted_positions, axis=1)
+#     weighted_distances = np.sum(distances * R[objects]) / total_precip
+    
+#     return weighted_distances
+
+
+# def compute_scaled_volume(R, objects):
+#     max_R = np.max(R[objects])
+#     scaled_volume = np.sum(R[objects]) / max_R  # Scaled precipitation volume
+#     if np.isnan(scaled_volume):
+#         print(f"{max_R=}, {np.sum(R[objects])=}, {scaled_volume=}")
+#     return scaled_volume
+
+def compute_salx(var_anom, var_anom_ref, threshold_factor=None):
+    """
+    Compute the Structure, Amplitude, and Location (SAL) scores
+    between a model anomaly field and a reference (ERA5) anomaly field.
+    
+    Parameters:
+    ----------
+    var_anom : ndarray
+        2D array [lat, lon] of model anomalies (shape 25 x 45).
+    var_anom_ref : ndarray
+        2D array [lat, lon] of reference anomalies (ERA5, shape 25 x 45).
+    threshold_factor : float, optional
+        A fractional multiplier (0.0 to 1.0) applied to the maximum absolute 
+        anomaly to define the threshold for centroid calculations. 
+        E.g., 0.1 means only anomalies stronger than 10% of the domain's 
+        maximum anomaly are used for the Location metric. 
+        If None, all grid points are used.
+    
+    Returns:
+    -------
+    S : float
+        Structure score [-2, 2].
+    A : float
+        Amplitude score [-2, 2].
+    L : float
+        Location score [0, 2].
+    """
+    
+    # Flatten arrays to work on 1D
+    model = var_anom.flatten()
+    ref = var_anom_ref.flatten()
+    
+    # ---------------------------------------------------------
+    # 1. Amplitude (A)
+    # ---------------------------------------------------------
+
+    scale = np.nanstd( ref )
+
+    mean_model = np.nanmean(model)
+    mean_ref = np.nanmean(ref)
+
+    A =  2 * np.tanh(( mean_model - mean_ref ) / scale + 1e-10 )
+
+    # ---------------------------------------------------------
+    # 2. Structure (S)
+    # ---------------------------------------------------------
+    std_model = np.nanstd(model)
+    std_ref = np.nanstd(ref)
+    S = 2 * (std_model - std_ref) / (std_model + std_ref + 1e-10)
+    
+    # ---------------------------------------------------------
+    # 3. Location (L)
+    # ---------------------------------------------------------
+    # Location (L) : distance between centroids normalized by domain size
+    # Compute centroids (weighted by absolute anomaly)
+    x = np.arange(var_anom.shape[1])  # longitude indices
+    y = np.arange(var_anom.shape[0])  # latitude indices
+
+    xx, yy = np.meshgrid(x, y)
+    
+    # Absolute anomaly weights
+    weight_model = np.abs(var_anom)
+    weight_ref = np.abs(var_anom_ref)
+    
+    if threshold_factor is not None:
+        # Calculate thresholds as factor * max_value
+        thresh_m = threshold_factor * np.nanmax(weight_model)
+        thresh_r = threshold_factor * np.nanmax(weight_ref)
+        
+        # Zero out weights below the threshold
+        weight_model[weight_model < thresh_m] = np.nan
+        weight_ref[weight_ref < thresh_r] = np.nan
+
+    
+    # Model centroid
+    sum_weight_model = np.nansum(weight_model) + 1e-10
+    x_model = np.nansum(xx * weight_model) / sum_weight_model
+    y_model = np.nansum(yy * weight_model) / sum_weight_model
+    
+    # Reference centroid
+    sum_weight_ref = np.nansum(weight_ref) + 1e-10
+    x_ref = np.nansum(xx * weight_ref) / sum_weight_ref
+    y_ref = np.nansum(yy * weight_ref) / sum_weight_ref
+    
+    # Euclidean distance between centroids
+    dist = np.sqrt((x_model - x_ref)**2 + (y_model - y_ref)**2)
+    
+    # Normalize distance by domain diagonal
+    domain_diag = np.sqrt(var_anom.shape[0]**2 + var_anom.shape[1]**2)
+    L = 2 * dist / domain_diag
+    
     return S, A, L
 
-def identify_objects(R, threshold_factor=1/15):
-    # Here we make no assumptions about the existence of objects in the data - every grid point can belong to an object
-    max_R = np.max(R)
-    threshold = threshold_factor * max_R
-    objects = (R >= threshold)
-    return objects
 
-def compute_weighted_distance(R, objects):
-    # Get the indices of all grid points where "objects" is True
-    object_indices = np.array(np.nonzero(objects))  # shape will be (2, num_objects)
-    
-    # Compute total precipitation for normalization
-    total_precip = np.sum(R[objects])
-    
-    # Calculate the weighted center of mass for the object
-    weighted_positions = np.sum(object_indices * R[objects], axis=1) / total_precip
-    
-    # Compute the weighted distance of all object grid points to the center of mass
-    distances = np.linalg.norm(object_indices.T - weighted_positions, axis=1)
-    weighted_distances = np.sum(distances * R[objects]) / total_precip
-    
-    return weighted_distances
+def safe_weighted_avg(val_p, val_n, w_p, w_n):
+    # PySteps can sometimes return NaN if no objects pass the threshold factor.
+    # This ensures the final score isn't destroyed if only one side (pos/neg) is valid.
+    valid_p = not np.isnan(val_p)
+    valid_n = not np.isnan(val_n)
+
+    if valid_p and valid_n:
+        return (val_p * w_p) + (val_n * w_n)
+    elif valid_p:
+        return val_p  # Fallback entirely to positive score if negative is NaN
+    elif valid_n:
+        return val_n  # Fallback entirely to negative score if positive is NaN
+    else:
+        return np.nan
 
 
-def compute_scaled_volume(R, objects):
-    max_R = np.max(R[objects])
-    scaled_volume = np.sum(R[objects]) / max_R  # Scaled precipitation volume
-    if np.isnan(scaled_volume):
-        print(f"{max_R=}, {np.sum(R[objects])=}, {scaled_volume=}")
-    return scaled_volume
+def compute_bisal(prediction, reference, factor=1/15, tstorm_kwargs=None):
+    """
+    Compute the BiSAL (Structure, Amplitude, Location - Twice) metric for 
+    fields containing both positive and negative values.
+    """
+    # 1. Calculate the proportional weights based on total absolute "mass"
+    # This represents how much "weight" the positives have vs the negatives
+    pos_mask_pred, pos_mask_ref = prediction > 0, reference > 0
+    neg_mask_pred, neg_mask_ref = prediction < 0, reference < 0
+
+    mass_p = np.nansum(prediction[pos_mask_pred])
+    mass_n = np.nansum(np.abs(prediction[neg_mask_pred]))
+    total_mass = mass_p + mass_n
+
+    # If the domain is completely empty/zero
+    if total_mass == 0:
+        return np.nan, np.nan, np.nan
+
+    weight_p = mass_p / total_mass
+    weight_n = mass_n / total_mass
+
+    # Initialize scores
+    Sp, Ap, Lp = np.nan, np.nan, np.nan
+    Sn, An, Ln = np.nan, np.nan, np.nan
+
+    # 2. Compute Positive SAL
+    if mass_p > 0:
+        pos_pred = np.copy(prediction)
+        pos_ref = np.copy(reference)
+        
+        pos_pred[neg_mask_pred] = 0.0
+        pos_ref[neg_mask_ref] = 0.0
+       
+        
+        Sp, Ap, Lp = pysteps.verification.salscores.sal(pos_pred, pos_ref, thr_factor=factor, tstorm_kwargs=tstorm_kwargs)
+
+    # 3. Compute Negative SAL
+    if mass_n > 0:
+        neg_pred = np.copy(prediction)
+        neg_ref = np.copy(reference)
+        # Extract negatives, convert to absolute positive values, set everything else to 0
+        
+        neg_pred[pos_mask_pred] = 0.0
+        neg_ref[pos_mask_ref] = 0.0
+        
+        neg_pred = np.abs(neg_pred)
+        neg_ref = np.abs(neg_ref)
+        
+        Sn, An, Ln = pysteps.verification.salscores.sal(neg_pred, neg_ref, thr_factor=factor, tstorm_kwargs=tstorm_kwargs)
+
+    # 5. Calculate final BiSAL scores
+    S = safe_weighted_avg(Sp, Sn, weight_p, weight_n)
+    A = safe_weighted_avg(Ap, An, weight_p, weight_n)
+    L = safe_weighted_avg(Lp, Ln, weight_p, weight_n)
+
+    return S, A, L
+    
+
+
+def infer_tstorm_kwargs(data_array, minref_p=85, minmax_p=95, mindiff_f=0.5):
+    """
+    Dynamically deduce PySteps tstorm parameters based on the 
+    statistical distribution of a 2D data array.
+    """
+    # Use absolute values to treat positive and negative anomalies equally
+    abs_data = np.abs(data_array)
+    valid_data = abs_data[~np.isnan(abs_data)]
+    
+    valid_data = np.array(valid_data, copy=True)
+    
+    if len(valid_data) == 0:
+        # Fallback if the array is completely empty/NaN
+        return {'minref': 0.1, 'minmax': 0.2, 'mindiff': 0.1, 'minsize': 3, 'mindis': 2}
+
+    # 1. Intensity Heuristics (Percentiles)
+    minref = np.nanpercentile(valid_data, minref_p)  # Top 15% of data
+    minmax = np.nanpercentile(valid_data, minmax_p)  # Top 5% of data
+    
+    # 2. Separation Heuristic
+    std_dev = np.nanstd(valid_data)
+    mindiff = std_dev * mindiff_f  # Half a standard deviation to split peaks
+    
+   # 3. Spatial Heuristics (Quartile Coefficient of Dispersion)
+    q1 = np.nanpercentile(valid_data, 25)
+    q3 = np.nanpercentile(valid_data, 75)
+    
+    # Calculate QCD. Add epsilon to prevent division by zero in perfectly flat fields
+    qcd = (q3 - q1) / (q3 + q1 + 1e-10)
+    
+    # Base spatial parameters on how "noisy/spiky" the data is using QCD
+    if qcd > 0.7:
+        # Highly localized/spiky (e.g., Precipitation differences)
+        # The lower 25% is near zero, while the upper 25% is distinctly higher.
+        minsize = 3
+        mindis = 2
+    elif qcd > 0.4:
+        # Moderate spread (e.g., Correlation patterns)
+        minsize = 6
+        mindis = 5
+    else:
+        # Smooth and broad (e.g., Z500 or MSLP differences)
+        # The data is relatively uniform across the middle 50%.
+        minsize = 15
+        mindis = 10
+
+    return {
+        'minref': float(minref),
+        'minmax': float(minmax),
+        'mindiff': float(mindiff),
+        'minsize': int(minsize),
+        'mindis': int(mindis)
+    }
+    
