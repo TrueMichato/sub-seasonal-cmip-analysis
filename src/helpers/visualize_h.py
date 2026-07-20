@@ -239,40 +239,47 @@ def plot_SAL(sal_scores: dict, title: str):
     plt.tight_layout()
     plt.show()
     
-def plot_Compare_SAL(sal_scores: dict, salx_scores: dict, title: str, label1: str = "SAL", label2: str = "SALX", salt_scores: dict = None, label3: str = "SALT"):
+def plot_Compare_SAL(sal_scores: dict, salx_scores: dict, title: str, label1: str = "SAL", label2: str = "SALX", salt_scores: dict = None, label3: str = "SALT", positive_only: bool = False):
     n_plots = 3 if salt_scores is not None else 2
     fig, axes = plt.subplots(1, n_plots, figsize=(14 * n_plots, 14))
     fontsize_label = 20 if salt_scores else 18
     fontsize_title = 22 if salt_scores else 20
     ticks = 18 if salt_scores else 16
-    
-    
-    
+
+    axis_min = 0 if positive_only else -2
+    axis_max = 2
+
     if n_plots == 2:
         axes = list(axes)
-    
+
     score_list = [sal_scores, salx_scores]
     label_list = [label1, label2]
     if salt_scores is not None:
         score_list.append(salt_scores)
         label_list.append(label3)
-    
+
     for ax, sal, label in zip(axes, score_list, label_list):
         models = list(sal.keys())
         data = list(sal.values())
         S, A, L = zip(*data)
         filtered_data = [(s, a, l, model) for s, a, l, model in zip(S, A, L, models) if not (np.isnan(s) or np.isnan(l))]
-        
+
         if not filtered_data:
             print(f"No valid data points to plot for {label}.")
             continue
-        
+
         S, A, L, models = zip(*filtered_data)
         scatter = ax.scatter(S, A, c=L, cmap='viridis', vmin=0, vmax=2, s=120)
-        ax.set_xlim(-2, 2)
-        ax.set_ylim(-2, 2)
-        ax.axhline(0, color='k', linewidth=1.5)
-        ax.axvline(0, color='k', linewidth=1.5)
+        ax.set_xlim(axis_min, axis_max)
+        ax.set_ylim(axis_min, axis_max)
+
+        if positive_only:
+            ax.axhline(0, color='k', linewidth=1.5)
+            ax.axvline(0, color='k', linewidth=1.5)
+        else:
+            ax.axhline(0, color='k', linewidth=1.5)
+            ax.axvline(0, color='k', linewidth=1.5)
+
         ax.set_xlabel('S', fontweight='bold', fontsize=fontsize_label)
         ax.set_ylabel('A', fontweight='bold', fontsize=fontsize_label)
         ax.set_title(f"{title} — {label}", fontsize=fontsize_title, fontweight='bold')
@@ -285,7 +292,7 @@ def plot_Compare_SAL(sal_scores: dict, salx_scores: dict, title: str, label1: st
             texts.append(ax.text(S[i], A[i], model, fontsize=14))
         adjust_text(texts, ax=ax, arrowprops=dict(arrowstyle='->', color='red', lw=0.8))
         ax.grid(True, linestyle='--', alpha=0.7)
-    
+
     plt.tight_layout()
     plt.show()
 
